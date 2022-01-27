@@ -1,0 +1,8 @@
+hal_intel_t265:
+  ros__parameters:
+    publishers:
+      raw_frame: /camera/raw_frame
+
+    frames: 
+      camera_link: camera_link
+      

@@ -17,10 +17,10 @@ from rclpy.node import Node
 
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
+from std_msgs.msg import Header
 from cv_bridge import CvBridge, CvBridgeError
 
 from . HALIntelT265 import HALIntelT265 
-from intel_t265_interfaces.msg import BinocularView  
 
 import numpy as np
 import scipy.misc
@@ -30,43 +30,44 @@ class Ros2HALIntelT265(Node):
 
     def __init__(self):
         super().__init__('hal_intel_t265')
-        self.publisher_raw_images = self.create_publisher(BinocularView, '/intel_t265/binocular_images', 10)
 
-        #self.publisher_rect_images = self.create_publisher(BinocularView, '/intel_t265/rectified_binocular_images', 10)
+        self.publisher_raw_image_left = self.create_publisher(Image, '/intel_t265/left_rect', 1)
+        self.publisher_raw_image_right = self.create_publisher(Image, '/intel_t265/right_rect', 1)
 
-        #self.publisher_disp_map = self.create_publisher(Image, '/intel_t265/disparity_map', 10)
+        self.publisher_disp_map = self.create_publisher(Image, '/intel_t265/disparity_map', 1)
 
         timer_period = 0.5  # seconds
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
-        self.cam = HALIntelT265()
+        self.cam = HALIntelT265(mode="separated_rect_with_disparity")
 
         self.bridge = CvBridge()
 
 
     def timer_callback(self):
 
-        image_left, image_right = self.cam.get_stereo_view()
+        cam_data = self.cam.get_full_stack()
 
-        if image_left is not None and image_right is not None:
-            msg = BinocularView()
-            msg.left_image =  self.bridge.cv2_to_imgmsg(image_left)
-            msg.right_image = self.bridge.cv2_to_imgmsg(image_right)
-            self.publisher_raw_images.publish(msg)
+        if cam_data['left'] is not None and cam_data['right'] is not None:
+            
+            left_image_msg =  self.bridge.cv2_to_imgmsg(cam_data['left'])
+            left_image_msg.header = Header()
+            left_image_msg.header.stamp = self.get_clock().now().to_msg()
+            left_image_msg.header.frame_id = "left_cam"
+            self.publisher_raw_image_left.publish(left_image_msg)
 
-            '''
-            self.cam.undistort()
-            msg2 = BinocularView()
-            msg2.left_image =  self.bridge.cv2_to_imgmsg(color_image_left)
-            msg2.right_image = self.bridge.cv2_to_imgmsg(color_image_right)
-            self.publisher_rect_images.publish(msg2)
+            right_image_msg = self.bridge.cv2_to_imgmsg(cam_data['right'])
+            right_image_msg.header = Header()
+            right_image_msg.header.stamp = self.get_clock().now().to_msg()
+            right_image_msg.header.frame_id = "right_cam"
+            self.publisher_raw_image_right.publish(right_image_msg)
 
-            self.cam.compute_disparity()
-            msg3 = Image()
-            msg3 =  self.bridge.cv2_to_imgmsg(self.cam.disparity_map)
+            disp_msg =  self.bridge.cv2_to_imgmsg(cam_data['disp'])
+            disp_msg.header = Header()
+            disp_msg.header.stamp = self.get_clock().now().to_msg()
+            disp_msg.header.frame_id = "left_cam"
 
-            self.publisher_disp_map.publish(msg3)
-            '''
+            self.publisher_disp_map.publish(disp_msg)
 
 
 

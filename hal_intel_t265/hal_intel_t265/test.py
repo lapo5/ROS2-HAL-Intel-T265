@@ -4,13 +4,13 @@ import numpy as np
 
 def main(args=None):
     
-    hal_intel = HALIntelT265()
+    hal_intel = HALIntelT265(mode="separated_rect_with_disparity")
 
     # Set up an OpenCV window to visualize the results
-    WINDOW_TITLE1 = 'Realsense - Raw Images'
+    WINDOW_TITLE1 = 'Realsense - Raw Image Left'
     cv2.namedWindow(WINDOW_TITLE1, cv2.WINDOW_NORMAL)
 
-    WINDOW_TITLE2 = 'Realsense - Rectified Images'
+    WINDOW_TITLE2 = 'Realsense - Raw Image Right'
     cv2.namedWindow(WINDOW_TITLE2, cv2.WINDOW_NORMAL)
 
     WINDOW_TITLE3 = 'Realsense - Disparity Map'
@@ -19,22 +19,12 @@ def main(args=None):
         image = hal_intel.get_full_stack()
 
         if image is not None:
-            displayer = np.hstack((hal_intel.frame_data["left"], hal_intel.frame_data["right"]))
-            cv2.imshow(WINDOW_TITLE1, displayer)
+            cv2.imshow(WINDOW_TITLE1, image["left"])
 
-            cv2.imshow(WINDOW_TITLE2, image)
+            cv2.imshow(WINDOW_TITLE2, image["right"])
 
-            cv2.imshow(WINDOW_TITLE3, hal_intel.disparity_map)
+            cv2.imshow(WINDOW_TITLE3, image["disp"])
             key = cv2.waitKey(1)
-            if key == ord('s'): hal_intel.mode = "stack"
-            if key == ord('o'): hal_intel.mode = "overlay"
-            if key == ord('q') or cv2.getWindowProperty(WINDOW_TITLE1, cv2.WND_PROP_VISIBLE) < 1:
-                break
-            if key == ord('q') or cv2.getWindowProperty(WINDOW_TITLE2, cv2.WND_PROP_VISIBLE) < 1:
-                break
-            if key == ord('q') or cv2.getWindowProperty(WINDOW_TITLE3, cv2.WND_PROP_VISIBLE) < 1:
-                break
-
 
 
 if __name__ == '__main__':

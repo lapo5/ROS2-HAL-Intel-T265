@@ -25,7 +25,7 @@ from threading import Lock
 
 class HALIntelT265:
 
-    def __init__(self):
+    def __init__(self, mode="stack"):
         
         self.frame_mutex = Lock()
         self.frame_data = {"left"  : None,
@@ -68,20 +68,29 @@ class HALIntelT265:
         # Configure the OpenCV stereo algorithm. See
         # https://docs.opencv.org/3.4/d2/d85/classcv_1_1StereoSGBM.html for a
         # description of the parameters
-        self.window_size = 5
+
+        
         self.min_disp = 0
         # must be divisible by 16
-        self.num_disp = 112 - self.min_disp
+        self.num_disp = 160
         self.max_disp = self.min_disp + self.num_disp
-        self.stereo = cv2.StereoSGBM_create(minDisparity = self.min_disp,
-                                       numDisparities = self.num_disp,
-                                       blockSize = 16,
-                                       P1 = 8*3*self.window_size**2,
-                                       P2 = 32*3*self.window_size**2,
-                                       disp12MaxDiff = 1,
-                                       uniquenessRatio = 10,
-                                       speckleWindowSize = 100,
-                                       speckleRange = 32)
+
+        self.block_size = 5
+        
+        self.stereo_good = cv2.StereoSGBM_create(minDisparity = self.min_disp,
+                                        numDisparities = self.num_disp,
+                                        blockSize = self.block_size,
+                                        P1 = 8*3*self.block_size**2,
+                                        P2 = 32*3*self.block_size**2,
+                                        disp12MaxDiff = -1,
+                                        uniquenessRatio = 10,
+                                        speckleWindowSize = 0,
+                                        speckleRange = 1)
+        
+        self.use_stereo_good = True
+
+        self.stereo = cv2.StereoBM_create(numDisparities=self.num_disp,
+                                            blockSize=self.block_size)
 
 
         # We need to determine what focal length our undistorted images should have
@@ -144,11 +153,12 @@ class HALIntelT265:
         self.undistort_rectify = {"left"  : (self.lm1, self.lm2),
                                     "right" : (self.rm1, self.rm2)}
 
-        self.mode = "stack"
-    
+        self.mode = mode
+
 
     def __del__(self):
         self.pipe.stop()
+
 
     def acquire_data(self):
         # Check if the camera has acquired any frames
@@ -163,48 +173,70 @@ class HALIntelT265:
             self.frame_copy = {"left"  : self.frame_data["left"].copy(),
                                 "right" : self.frame_data["right"].copy()}
             self.frame_mutex.release()
+        else: 
+            print("Frame Not Valid")
+
 
     def undistort(self):
-            # Undistort and crop the center of the frames
-            self.center_undistorted = {"left" : cv2.remap(src = self.frame_copy["left"],
-                                          map1 = self.undistort_rectify["left"][0],
-                                          map2 = self.undistort_rectify["left"][1],
-                                          interpolation = cv2.INTER_LINEAR),
-                                  "right" : cv2.remap(src = self.frame_copy["right"],
-                                          map1 = self.undistort_rectify["right"][0],
-                                          map2 = self.undistort_rectify["right"][1],
-                                          interpolation = cv2.INTER_LINEAR)}
+        # Undistort and crop the center of the frames
+        self.center_undistorted = {"left" : cv2.remap(src = self.frame_copy["left"],
+                                      map1 = self.undistort_rectify["left"][0],
+                                      map2 = self.undistort_rectify["left"][1],
+                                      interpolation = cv2.INTER_LINEAR),
+                              "right" : cv2.remap(src = self.frame_copy["right"],
+                                      map1 = self.undistort_rectify["right"][0],
+                                      map2 = self.undistort_rectify["right"][1],
+                                      interpolation = cv2.INTER_LINEAR)}
 
-            self.color_image_left = cv2.cvtColor(self.center_undistorted["left"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
+        self.color_image_left = cv2.cvtColor(self.center_undistorted["left"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
 
-            self.color_image_right = cv2.cvtColor(self.center_undistorted["right"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
+        self.color_image_right = cv2.cvtColor(self.center_undistorted["right"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
+
 
     def compute_disparity(self):
-            # compute the disparity on the center of the frames and convert it to a pixel disparity (divide by DISP_SCALE=16)
+        # compute the disparity on the center of the frames and convert it to a pixel disparity (divide by DISP_SCALE=16)
+        
+        if self.use_stereo_good:
+            self.disparity = self.stereo_good.compute(self.center_undistorted["left"], 
+                                    self.center_undistorted["right"]).astype(np.float32) / 16.0
+        else:
             self.disparity = self.stereo.compute(self.center_undistorted["left"], 
-                                        self.center_undistorted["right"]).astype(np.float32) / 16.0
+                                    self.center_undistorted["right"]).astype(np.float32) / 16.0
 
-            # re-crop just the valid part of the disparity
-            self.disparity = self.disparity[:,self.max_disp:]
+        # re-crop just the valid part of the disparity
+        self.disparity = self.disparity[:,self.max_disp:]
 
-            # convert disparity to 0-255 and color it
-            self.disp_vis = 255*(self.disparity - self.min_disp)/ self.num_disp
-            self.disp_color = cv2.applyColorMap(cv2.convertScaleAbs(self.disp_vis,1), cv2.COLORMAP_JET)
-            self.color_image_left = cv2.cvtColor(self.center_undistorted["left"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
+        # convert disparity to 0-255 and color it
+        self.disp_vis = 255*(self.disparity - self.min_disp)/ self.num_disp
+        self.disp_color = cv2.applyColorMap(cv2.convertScaleAbs(self.disp_vis,1), cv2.COLORMAP_JET)
+        self.color_image_left = cv2.cvtColor(self.center_undistorted["left"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
 
-            self.color_image_right = cv2.cvtColor(self.center_undistorted["right"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
+        self.color_image_right = cv2.cvtColor(self.center_undistorted["right"][:,self.max_disp:], cv2.COLOR_GRAY2RGB)
 
-            self.disparity_map = self.color_image_left.copy()
-            self.ind = self.disparity >= self.min_disp
-            self.disparity_map[self.ind, 0] = self.disp_color[self.ind, 0]
-            self.disparity_map[self.ind, 1] = self.disp_color[self.ind, 1]
-            self.disparity_map[self.ind, 2] = self.disp_color[self.ind, 2]
-            
+        self.disparity_map = self.color_image_left.copy()
+        self.ind = self.disparity >= self.min_disp
+        self.disparity_map[self.ind, 0] = self.disp_color[self.ind, 0]
+        self.disparity_map[self.ind, 1] = self.disp_color[self.ind, 1]
+        self.disparity_map[self.ind, 2] = self.disp_color[self.ind, 2]
+
+        self.disparity = cv2.normalize(src=self.disparity, dst=self.disparity, beta=0, alpha=255, norm_type=cv2.NORM_MINMAX)
+        self.disparity = np.uint8(self.disparity)
+
+        points = cv2.reprojectImageTo3D(self.disparity, self.Q)
+        mask = self.disparity > self.disparity.min()
+        out_points = points[mask]
+
+        print(out_points)
+        print(out_points.shape)
+
+
     def get_full_stack(self):
 
         self.acquire_data()
-        self.undistort()
-        self.compute_disparity()
+
+        if self.valid:
+            self.undistort()
+            self.compute_disparity()
 
         if not self.valid:
             return None 
@@ -212,8 +244,18 @@ class HALIntelT265:
         if self.mode == "stack":
             return np.hstack((self.color_image_left, self.color_image_right))
 
+        elif self.mode == "separated":
+            return self.frame_copy
+
+        elif self.mode == "separated_rect":
+            return {'left': self.color_image_left, 'right': self.color_image_right}
+
+        elif self.mode == "separated_rect_with_disparity":
+            return {'left': self.color_image_left, 'right': self.color_image_right, 'disp': self.disparity_map}
+
         else:
             return self.disparity_map
+
 
     def get_stereo_view(self):
 
@@ -234,6 +276,7 @@ class HALIntelT265:
         T = np.array(extrinsics.translation)
         return (R, T)
 
+
     """
     Returns a camera matrix K from librealsense intrinsics
     """
@@ -242,11 +285,13 @@ class HALIntelT265:
                          [            0, intrinsics.fy, intrinsics.ppy],
                          [            0,             0,              1]])
 
+
     """
     Returns the fisheye distortion from librealsense intrinsics
     """
     def fisheye_distortion(self, intrinsics):
         return np.array(intrinsics.coeffs[:4])
+
 
     """
     This callback is called on a separate thread, so we must use a mutex
